@@ -1,0 +1,162 @@
+# Probe 5 — page.applyPropertyUpdates + view.applyPropertyUpdates
+# Captured: 2026-05-07T22:03:04.658Z
+# Gateway: Ignition 8.3.6 in cookbook-ignition Docker container
+
+VM565:3 === PROBE 5: page.applyPropertyUpdates + view.applyPropertyUpdates (2026-05-07T22:03:04.658Z) ===
+VM565:3 [via window.__client — confirmed 8.3.6]
+VM565:3 --- page.applyPropertyUpdates ---
+VM565:3 EXISTS. source: function () { [native code] }
+VM565:3 applyPropertyUpdates(null): ERR Cannot read properties of null (reading 'values')
+VM565:3 applyPropertyUpdates([]): ERR Cannot read properties of undefined (reading 'props')
+VM565:3 applyPropertyUpdates([{}]): ERR Cannot read properties of undefined (reading 'props')
+VM565:3 applyPropertyUpdates([{viewMountPath:'x'}]): ERR Cannot read properties of undefined (reading 'props')
+VM565:3 applyPropertyUpdates([{viewMountPath:'x',propUpdates:[]}]): ERR Cannot read properties of undefined (reading 'props')
+VM565:3 applyPropertyUpdates with real vmp, empty propUpdates: ERR Cannot read properties of undefined (reading 'props')
+VM565:3 applyPropertyUpdates with real vmp, [{path:'x',value:42}]: ERR Cannot read properties of undefined (reading 'props')
+VM565:3 --- page.applyPendingUpdates ---
+VM565:3 EXISTS. source: function () { [native code] }
+VM565:3 applyPendingUpdates(): OK
+VM565:3 --- view.applyPropertyUpdates (on first view) ---
+VM565:3 view mountPath: C
+VM565:3 view.applyPropertyUpdates EXISTS. source: applyPropertyUpdates(e){Object.keys(e).forEach((t=>{try{if(""===t){const t=e[""];t.params&&this.params.update(t.params),t.props&&this.props.update(t.props),t.custom&&this.custom.update(t.custom)}else{const o=t.split(":").map((e=>parseInt(e)));this.root.dispatchUpdates(o,e[t])}}catch(e){h.fatalException(`Error applying property updates on ${this.instanceId}.${t}`,e)}}))}
+VM565:3 view.applyPropertyUpdates(null): ERR Cannot convert undefined or null to object
+VM565:3 view.applyPropertyUpdates([]): OK
+VM565:3 view.applyPropertyUpdates([{path:'x',value:42}]): OK
+VM565:3 view.applyPropertyUpdates([{path:'params.x',value:42}]): OK
+
+# === FINDINGS ===
+#
+# Q6 ✅ ANSWERED in two parts.
+#
+# ─── view.applyPropertyUpdates(payload) — VIEW-LEVEL (we got the source) ───
+#
+# Deminified source:
+#
+#   applyPropertyUpdates(e) {
+#     Object.keys(e).forEach((t) => {
+#       try {
+#         if ("" === t) {
+#           const inner = e[""];
+#           inner.params && this.params.update(inner.params);
+#           inner.props  && this.props.update(inner.props);
+#           inner.custom && this.custom.update(inner.custom);
+#         } else {
+#           const path = t.split(":").map((s) => parseInt(s));
+#           this.root.dispatchUpdates(path, e[t]);
+#         }
+#       } catch (err) {
+#         h.fatalException(`Error applying property updates on ${this.instanceId}.${t}`, err);
+#       }
+#     });
+#   }
+#
+# Payload shape: an OBJECT (not array!) whose keys are either:
+#   • ""              — bulk update for view's params / props / custom property trees.
+#                       Value: { params: <encoded-tree>, props: <encoded-tree>, custom: <encoded-tree> }
+#                       Each non-empty subkey is forwarded to that tree's .update() method.
+#   • "1:2:3"         — colon-separated NUMERIC path. Forwarded to
+#                       this.root.dispatchUpdates(parsedPath, value) for component-tree updates.
+#                       The numbers are component IDs in the root composite tree.
+#
+# So a typical synthesized call would be:
+#
+#   ourView.applyPropertyUpdates({
+#     "": {
+#       "params": {"$":["map/merge"], "color": {"$":["str","#FF0000"]}}
+#     }
+#   });
+#
+# This DIRECTLY closes Q2 (params.update encoded format): it's the same
+# tuple-tagged tree we saw in the client-value-update WS frame in Probe 3.
+#
+# Why the array calls "OK"d but didn't apply: Object.keys([{...}]) returns ["0"].
+# "0".split(":").map(parseInt) = [0]. dispatchUpdates([0], <obj>) was attempted
+# but wrapped in try/catch, so silently swallowed. Not an error; just no-op
+# because the value shape didn't match what dispatchUpdates expects.
+#
+# ─── page.applyPropertyUpdates(frame) — SESSION-LEVEL (native, inferred) ───
+#
+# Native code, no source. But the error messages reveal the expected shape:
+#   • null              → "Cannot read properties of null (reading 'values')"
+#                         → expects an object with a `.values` field
+#   • [] / [{...}]      → "Cannot read properties of undefined (reading 'props')"
+#                         → walks `.values.<something>.props` and fails
+#
+# Cross-reference Probe 3's captured incoming WS frame:
+#   { "values": { "views": {}, "page": {}, "session": { "props": {...} } },
+#     "sync": [] }
+#
+# So page.applyPropertyUpdates EXPECTS the full incoming-WS-frame envelope.
+# It's literally the entry point for replaying gateway-pushed updates.
+#
+# Synthesizing one would look like:
+#
+#   window.__client.page.applyPropertyUpdates({
+#     "values": {
+#       "views":   { "<mountPath>": <view-level-payload> },
+#       "page":    {},
+#       "session": {}
+#     },
+#     "sync": []
+#   });
+#
+# (Exact shape of the per-view inner payload still needs confirmation — but
+# given the symmetry with view.applyPropertyUpdates, it's likely keyed the
+# same way: "" for bulk + "1:2:3" for component paths.)
+#
+#
+# ─── page.applyPendingUpdates() — bonus ───
+#
+# No-arg method. Returns OK. Drains the page.pendingPropertyUpdates queue
+# (which we saw exists as a session field in Probe 1). Useful if we ever
+# want to queue updates and apply them all at once.
+#
+#
+# === Implications across the whole task ===
+#
+# 1. We now have a complete recipe for INJECTING gateway-style property
+#    updates from JS, bypassing the WebSocket entirely:
+#       view.applyPropertyUpdates({ "": { params: <encoded>, props: <encoded>, custom: <encoded> } })
+#    This is a higher-bandwidth alternative to repeated params.write(key, value)
+#    calls — bulk update in one MobX-reaction batch.
+#
+# 2. Combined with the WS hooking from Probe 3, we can:
+#    - Capture an incoming client-value-update frame
+#    - Modify it
+#    - Replay it via page.applyPropertyUpdates
+#    Useful for testing how the client reacts to gateway updates without
+#    touching the gateway.
+#
+# 3. The `1:2:3` numeric-path format implies a stable component-ID tree.
+#    Worth a follow-up probe to map view.root → numeric IDs, so we can
+#    target individual components by ID for surgical updates.
+#
+#
+# === Recurring anomaly: View mountPath = "C" ===
+#
+# Third sighting. views[0] in 8.3.6 with our setup has mountPath = "C".
+# Probe 6 should enumerate ALL views in page.views with their mountPath +
+# resourcePath + instanceId so we know what "C" actually is.
+#
+# Working hypothesis: "C" might be a session-level "client" or "configuration"
+# pseudo-view that's always at index 0 (a docked or system view), with our
+# actual Internals_Recon view at views[1] or higher. If true, Probes 2/4/5
+# were operating on the wrong view — the API surface still got tested correctly
+# because property-tree shape is the same, but the data we read (empty params
+# {}, empty exports) makes more sense for a system pseudo-view than for our
+# real one.
+#
+#
+# === Action items for INTERNALS doc ===
+#
+# §11 Q6: ✅ ANSWERED — view-level format documented; page-level shape inferred
+#         from error messages and Probe 3's WS frame.
+# §11 Q2: upgrade to ✅ ANSWERED — encoded format is tuple-tagged tree
+#         (`{"$":["tag", ...args]}`), payloads can be applied via
+#         params.update() / view.applyPropertyUpdates({"":{...}}).
+# §14 (new): "Gateway WS protocol — observed wire format" should now include:
+#   - The `values: {views, page, session}` outer envelope
+#   - The view-level inner payload (`""` + component path keys)
+#   - The encoded property-tree tuple format
+# §15 (new): "Synthesizing property updates client-side" with the
+#   view.applyPropertyUpdates and page.applyPropertyUpdates recipes.

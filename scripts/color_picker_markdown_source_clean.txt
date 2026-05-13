@@ -1,0 +1,21 @@
+// Perspective expression binding for ColorPickerMarkdown.props.source — PRODUCTION
+//
+// Bridges an HTML5 <input type="color"> picker through to a Perspective view
+// param. Reaches into Perspective's internal property tree via the React
+// fiber, finds this view's params object, and calls its write() method.
+// MobX reactions on bindings fire automatically.
+//
+// Requirements:
+//   - This view has a 'color' param (string, e.g. "#FF0000")
+//   - The view also contains a HIDDEN TextField (any input[type="text"])
+//     that the JS uses as a hop point — its DOM node lets us reach the
+//     React fiber. The TextField's binding doesn't have to be set; we only
+//     need it to exist so document.querySelector finds an input.
+//
+// To use in a different param name, change BOTH 'color' references below
+// (the first is for the picker's initial value display; the second is the
+// param name we write to).
+
+concat('<input type="color" value="',
+{view.params.color},
+'" oninput="(function(el){var tf=document.querySelector(\'input[type=text]\'); if(!tf)return; var fk=Object.keys(tf).filter(function(k){return k.indexOf(\'__reactFiber\')===0;})[0]; if(!fk)return; var f=tf[fk]; var vmp; try{var f2=f; for(var i=0;i<2;i++){f2=f2.return;} vmp=f2.stateNode.props.store.viewMountPath;}catch(e){return;} for(var i=0;i<9;i++){if(!f)return; f=f.return;} var page=f.stateNode.props.store.page; var views; try{views=Array.from(page.views.values());}catch(e){views=Object.values(page.views._data||{});} for(var i=0;i<views.length;i++){if(views[i].mountPath===vmp){try{views[i].params.write(\'color\', el.value);}catch(e){} return;}}})(this)"/>')

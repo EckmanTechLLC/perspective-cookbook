@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Node / JavaScript
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Environment / local config
+.env
+*.env.local
+*.local
+
+# Build output
+dist/
+build/
+*.egg-info/
+
+# Note: *.gwbk is NOT ignored — gateway backup files are fine to commit if added.

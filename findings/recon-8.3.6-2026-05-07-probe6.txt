@@ -1,0 +1,135 @@
+# Probe 6 — Cross-version name stability dump
+# Captured: 2026-05-07T22:09:23.259Z
+# Gateway: Ignition 8.3.6 in cookbook-ignition Docker container
+# UA: Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) Chrome/147.0.0.0 Mobile Safari/537.36
+#     (Chrome DevTools mobile emulation was on — irrelevant to MobX/JS layer
+#     behavior, but worth flagging for HTTPS-required browser-API probes
+#     in tasks 5–8 where UA may matter.)
+
+VM582:3 === PROBE 6: Cross-version name stability dump (2026-05-07T22:09:23.259Z) ===
+
+VM582:3 --- PATH A: window.__client ---
+VM582:3 window.__client: FOUND
+VM582:3 window.__client.page: FOUND
+VM582:3 window.__client.page.views: 1 view(s)
+
+VM582:3 --- PATH B: fiber walk ---
+VM582:3 fiber walk: no startEl found (class names may have changed in this build)
+
+VM582:3 --- PATH COMPARISON ---
+VM582:3 Only PATH A (window.__client) succeeded — fiber walk broken in this build
+
+VM582:3 --- session store key check ---
+session.page: OK              session.connection: OK         session.system: OK
+session.notifications: OK     session.location: OK           session.history: OK
+session.sessionState: OK      session.mounts: OK             session.fsm: OK
+session.flags: OK             session.error: OK              session.idle: OK
+session.keyEvent: OK          session.auth: OK               session.defaultsStore: OK
+session.iconRendererStore: OK session.autoIdpAuth: OK        session._token: OK
+session.instrumentation: OK
+(19/19 expected keys present)
+
+VM582:3 --- page key check ---
+page.views: OK                       page.applyPropertyUpdates: OK
+page.applyPagePropertyUpdates: OK    page.applySessionPropertyUpdates: OK
+page.applyPendingUpdates: OK         page.findView: OK
+page.observeView: OK                 page.isOpen: OK
+page.startView: OK                   page.stopView: OK
+page._newViewStore: OK               page._findViewDef: OK
+page._isViewDefined: OK              page.isLoadAheadSafe: OK
+page.startViewLoadAhead: OK          page.requestSync: OK
+page.sync: OK                        page.sendResynchronizeViews: OK
+page.onPropWrite: OK                 page.downloadFile: OK
+page.onFileDownload: OK              page.eventFiredFromGateway: OK
+page.onEventFired: OK                page.pendingPropertyUpdates: OK
+page.dirtyViews: OK                  page.pageProps: OK
+page.sessionProps: OK                page.sessionCustom: OK
+(28/28 expected keys present)
+
+VM582:3 --- view store key check (mountPath=C) ---
+view.mountPath: OK            view.resourcePath: OK         view.params: OK
+view.custom: OK               view.props: OK                view.root: OK
+view.sessionState: OK         view.running: OK              view.accessDenied: OK
+view.page: OK                 view.applyPropertyUpdates: OK view._newComponentStore: OK
+view.startup: OK              view.shutdown: OK             view.requestPrint: OK
+view.prepareSyncRequest: OK   view.clearSyncedModels: OK    view.isDirty: OK
+view.dispatchEvent: OK        view.writeInputs: OK          view.readInputs: OK
+(21/21 expected keys present)
+
+VM582:3 --- params method check ---
+params.read: OK         params.write: OK        params.update: OK
+params.operate: OK      params.subscribe: OK    params.onWrite: OK
+params.readKeys: OK     params.readLength: OK   params.readString: OK
+params.readNumber: OK   params.readBoolean: OK  params.readDate: OK
+params.readArray: OK    params.readObject: OK   params.readQualified: OK
+params.readEncoded: OK  params.qualityOf: OK    params.isObject: OK
+params.isArray: OK      params.isPrimitive: OK  params.isDataset: OK
+params.isDirty: OK      params.getDirtyWrites: OK params.getQualities: OK
+params.toPlainObject: OK params.export: OK
+(26/26 expected methods present)
+
+# === FINDINGS ===
+#
+# Q7 ✅ ANSWERED for 8.3.6:
+#
+# Reach paths:
+#   • PATH A (window.__client)  — STABLE, verified live
+#   • PATH B (fiber walk)       — BROKEN in 8.3.6 due to DOM class-name change
+#                                 (`.ia-display-markdown` no longer matches the
+#                                 Markdown component's rendered wrapper)
+#
+# All documented store / property-tree names from PERSPECTIVE_INTERNALS.md
+# §2, §5, §6 are present in 8.3.6:
+#   • 19/19 session-store keys
+#   • 28/28 page-level methods/fields
+#   • 21/21 view-store keys/methods
+#   • 26/26 property-tree methods
+#
+# Implication for cross-version doc §11 Q7:
+#   - Names are STABLE 8.3.0 → 8.3.6
+#   - DOM class names are NOT stable — never depend on them
+#   - The window.__client global is the only canonical reach in 8.3.x
+#
+# === The mountPath="C" mystery: SOLVED ===
+#
+# `page.views` has exactly 1 view, and that view IS our Internals_Recon view
+# (the only one we created). Its mountPath is literally "C".
+#
+# This contradicts §5's documentation which said mountPath looked like
+# `cookbook/Internals_Recon@0`. In 8.3.6, mountPath has been changed to an
+# opaque short identifier (single char here, likely a base64-ish counter).
+# The human-readable path moved to `resourcePath` (which the probe
+# confirmed exists via `view.resourcePath: OK`, though we didn't log its
+# value — useful follow-up).
+#
+# §5 in PERSPECTIVE_INTERNALS.md needs to be updated:
+#   - mountPath is now an opaque ID; do NOT pattern-match against it
+#   - To find a specific view by user-known name, use `view.resourcePath`
+#     (or page.findView() which is documented to exist).
+#
+# === UA / mobile-emulation note ===
+#
+# The User-Agent shows Chrome was in mobile-emulation mode (Nexus 5).
+# Doesn't affect the MobX/JS layer at all. BUT for tasks 5–8 (Service
+# Worker, Bluetooth, Serial, WebRTC) UA-gating may matter (e.g. some APIs
+# behave differently on mobile UA, some sites refuse mobile UA, etc.).
+# Make sure mobile emulation is OFF before running those probes.
+#
+# === Action items for INTERNALS doc ===
+#
+# §11 Q7: ✅ ANSWERED for 8.3.6 — name stability confirmed; fiber walk broken.
+# §5: change mountPath description from "the mount key for this view (e.g.
+#     'cookbook/SomeView@0')" to "an opaque short identifier; use resourcePath
+#     for the human path."
+# §12 (fiber walk): now explicitly broken in 8.3.6. Annotate as "fallback
+#     for older builds only" — for 8.3.x always use window.__client.
+# §11 Q1 (already ✅) — add cross-reference: stability confirmed by Probe 6.
+# Add to §10 (Known gotchas): "DO NOT rely on `mountPath` being a path-like
+#     string. In 8.3.6+ it's an opaque ID. Use resourcePath for matching."
+#
+# === Task 02 capture phase: COMPLETE ===
+#
+# All 7 open questions answered. Probes 1–6 captured.
+# Next step: consolidate findings into PERSPECTIVE_INTERNALS.md §11 (mark
+# all ✅), add new §14 (WS protocol) + §15 (ghost stores / synth updates),
+# update memory.md, mark task-02 complete.

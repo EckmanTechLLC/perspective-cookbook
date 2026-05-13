@@ -1,0 +1,18 @@
+// Perspective expression — probe for window.__client + other global shorthands
+//
+// Paste this into a Markdown component's props.source expression binding.
+// Requirements:
+//   - Component must have markdown.escapeHtml: false (set in component props)
+//   - A div with id="recon-output" (created by this script itself)
+//   - Open Chrome DevTools → Console → "Preserve log" ON before running
+//
+// What it checks:
+//   Q1: Does window.__client exist? Any other global IA/Perspective shortcuts?
+//   If any global exists, dumps its keys and checks for .page / .connection / .views
+//
+// Output: pre#recon-output in the DOM + console.log lines
+
+concat(
+  '<div id="recon-output" style="font-family:monospace;font-size:11px;background:#0a0a18;color:#88ee88;padding:10px;height:300px;overflow-y:auto;white-space:pre-wrap;border-radius:4px">Running Probe 1...</div>',
+  '<img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" style="display:none" onload="eval(atob(\'KGZ1bmN0aW9uKCkgewogIHZhciBvdXQgPSBbXTsKICB2YXIgbG9nID0gZnVuY3Rpb24ocykgeyBvdXQucHVzaChzKTsgY29uc29sZS5sb2cocyk7IH07CgogIGxvZygiPT09IFBST0JFIDE6IHdpbmRvdy5fX2NsaWVudCArIGdsb2JhbCBzY2FuICgiICsgbmV3IERhdGUoKS50b0lTT1N0cmluZygpICsgIikgPT09Iik7CgogIHZhciBjYW5kaWRhdGVzID0gWyJfX2NsaWVudCIsICJfX2lnbml0aW9uIiwgIl9fcGVyc3BlY3RpdmUiLCAiX19wZyIsICJfX3Nlc3Npb24iLAogICAgICAgICAgICAgICAgICAgICJfX3N0b3JlIiwgIl9fYXBwIiwgIl9fZ2F0ZXdheSIsICJfX0lBIiwgIl9fUGVyc3BlY3RpdmUiXTsKICBjYW5kaWRhdGVzLmZvckVhY2goZnVuY3Rpb24oZykgewogICAgaWYgKHdpbmRvd1tnXSAhPT0gdW5kZWZpbmVkKSB7CiAgICAgIGxvZygid2luZG93LiIgKyBnICsgIiBFWElTVFMgKHR5cGU9IiArIHR5cGVvZiB3aW5kb3dbZ10gKyAiKSIpOwogICAgICB0cnkgewogICAgICAgIHZhciBrZXlzID0gT2JqZWN0LmtleXMod2luZG93W2ddKTsKICAgICAgICBsb2coIiAgb3duIGtleXM6ICIgKyBrZXlzLmpvaW4oIiwgIikpOwogICAgICAgIGlmICh3aW5kb3dbZ10ucGFnZSkgbG9nKCIgIC5wYWdlIGV4aXN0cywga2V5czogIiArIE9iamVjdC5rZXlzKHdpbmRvd1tnXS5wYWdlKS5qb2luKCIsICIpKTsKICAgICAgICBpZiAod2luZG93W2ddLmNvbm5lY3Rpb24pIGxvZygiICAuY29ubmVjdGlvbiBleGlzdHMsIGtleXM6ICIgKyBPYmplY3Qua2V5cyh3aW5kb3dbZ10uY29ubmVjdGlvbikuam9pbigiLCAiKSk7CiAgICAgICAgaWYgKHdpbmRvd1tnXS52aWV3cykgbG9nKCIgIC52aWV3cyBleGlzdHMiKTsKICAgICAgfSBjYXRjaChlKSB7IGxvZygiICBpbnNwZWN0IGVycm9yOiAiICsgZS5tZXNzYWdlKTsgfQogICAgfSBlbHNlIHsKICAgICAgbG9nKCJ3aW5kb3cuIiArIGcgKyAiID0gdW5kZWZpbmVkIik7CiAgICB9CiAgfSk7CgogIHZhciBkID0gZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoInJlY29uLW91dHB1dCIpOwogIGlmIChkKSBkLnRleHRDb250ZW50ID0gb3V0LmpvaW4oIlxuIik7Cn0pKCk7Cg==\'))">'
+)

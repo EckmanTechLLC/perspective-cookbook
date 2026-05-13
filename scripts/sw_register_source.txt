@@ -1,0 +1,175 @@
+(function () {
+  'use strict';
+  var VIEW_PATH = 'cookbook/SW_Demo';
+
+  // ── Reach view store via window.__client (§4 Route 0, canonical in 8.3.x) ──
+  function getView() {
+    var views = Array.from(window.__client.page.views.values());
+    return views.find(function (v) { return v.resourcePath === VIEW_PATH; }) || views[0];
+  }
+
+  var v = getView();
+  if (!v) { console.warn('[SW Demo] view not found:', VIEW_PATH); return; }
+
+  // ── Namespace for HTML onclick= handlers (avoids polluting window too much) ─
+  window.__sw = window.__sw || {};
+
+  // ── DOM helpers ────────────────────────────────────────────────────────────
+  function set(id, text) {
+    var el = document.getElementById(id);
+    if (el) { el.textContent = (text != null && text !== '') ? String(text) : '—'; }
+  }
+  function show(id, visible) {
+    var el = document.getElementById(id);
+    if (el) { el.style.display = visible ? '' : 'none'; }
+  }
+
+  // ── Sync DOM from view.custom ──────────────────────────────────────────────
+  function syncDom() {
+    var online = v.custom.read('online');
+    var badge  = document.getElementById('sw-online-badge');
+    if (badge) {
+      var isOnline = (online !== false);
+      badge.textContent = isOnline ? '● Online' : '○ Offline';
+      badge.style.color = isOnline ? '#4caf50' : '#f44336';
+    }
+    set('sw-status',    v.custom.read('swStatus'));
+    set('sw-scope',     v.custom.read('swScope'));
+    set('sw-cachename', v.custom.read('swCacheName'));
+    set('sw-cacheinfo', v.custom.read('cacheInfo'));
+    var err = v.custom.read('swError') || '';
+    show('sw-error-label', !!err);
+    show('sw-error',       !!err);
+    set('sw-error', err);
+  }
+
+  // ── Online/offline browser events ─────────────────────────────────────────
+  window.addEventListener('online',  function () { v.custom.write('online', true);  });
+  window.addEventListener('offline', function () { v.custom.write('online', false); });
+  v.custom.write('online', navigator.onLine);
+
+  // ── Subscribe once — updates DOM on any custom prop change ─────────────────
+  if (!v.__swSubInited) {
+    v.__swSubInited = true;
+    v.custom.subscribe(syncDom);
+  }
+  syncDom();
+
+  // ── Button: Inspect Cache ──────────────────────────────────────────────────
+  window.__sw.inspect = function () {
+    if (!window.caches) { v.custom.write('cacheInfo', 'Cache API unavailable'); return; }
+    caches.keys().then(function (names) {
+      if (!names.length) { v.custom.write('cacheInfo', '(no caches found)'); return; }
+      return Promise.all(names.map(function (n) {
+        return caches.open(n).then(function (c) {
+          return c.keys().then(function (ks) {
+            var preview = ks.slice(0, 8).map(function (r) { return '  ' + r.url; }).join('\n');
+            return n + ' [' + ks.length + ' entries]:\n' + preview +
+              (ks.length > 8 ? '\n  ...' : '');
+          });
+        });
+      })).then(function (lines) { v.custom.write('cacheInfo', lines.join('\n\n')); });
+    }).catch(function (e) { v.custom.write('cacheInfo', 'Error: ' + e.message); });
+  };
+
+  // ── Button: Clear Cache ────────────────────────────────────────────────────
+  window.__sw.clear = function () {
+    if (!window.caches) { v.custom.write('cacheInfo', 'Cache API unavailable'); return; }
+    caches.keys().then(function (names) {
+      return Promise.all(names.map(function (n) { return caches.delete(n); }));
+    }).then(function () {
+      v.custom.write('cacheInfo',   'All caches cleared.');
+      v.custom.write('swCacheName', '');
+    }).catch(function (e) { v.custom.write('cacheInfo', 'Clear error: ' + e.message); });
+  };
+
+  // ── Button: Simulate Offline ───────────────────────────────────────────────
+  // Sets Perspective's own simulatingLostConnection flag (see findings/probe1.txt).
+  // This flags the WS bridge as lost; Perspective will show its reconnect overlay.
+  // For full browser-level offline, use DevTools -> Network -> Offline instead.
+  window.__sw.simOff = function () {
+    if ('simulatingLostConnection' in window.__client) {
+      window.__client.simulatingLostConnection = true;
+    }
+    v.custom.write('online', false);
+    v.custom.write('cacheInfo',
+      'Offline simulated.\n' +
+      'Perspective WS bridge flagged as disconnected.\n\n' +
+      'Tip: DevTools → Network → Offline for full browser-level offline test.\n' +
+      '     The cached Perspective shell should still render.'
+    );
+  };
+
+  // ── Button: Reconnect ─────────────────────────────────────────────────────
+  window.__sw.reconn = function () {
+    if ('simulatingLostConnection' in window.__client) {
+      window.__client.simulatingLostConnection = false;
+    }
+    v.custom.write('online', navigator.onLine);
+    v.custom.write('cacheInfo', '');
+  };
+
+  // ── Guard against double-registration on Perspective re-renders ───────────
+  if (v.__swRegDone) { syncDom(); return; }
+  v.__swRegDone = true;
+
+  v.custom.write('swStatus', 'registering…');
+  v.custom.write('swError',  '');
+
+  // ── Check for secure context — SW requires HTTPS or localhost ─────────────
+  if (!('serviceWorker' in navigator)) {
+    v.custom.write('swStatus', 'not-supported');
+    v.custom.write('swError',
+      'serviceWorker API not available.\n' +
+      'Requires HTTPS or localhost (always secure).\n\n' +
+      'Quick fix for dev: add this origin to\n' +
+      'chrome://flags/#unsafely-treat-insecure-origin-as-secure\n' +
+      'and Relaunch Chrome.'
+    );
+    return;
+  }
+
+  // ── Register Service Worker served from WebDev endpoint ───────────────────
+  // scope: '/' requires Service-Worker-Allowed: / header from the WebDev handler.
+  navigator.serviceWorker.register('/system/webdev/cookbook/sw_handler', { scope: '/' })
+    .then(function (reg) {
+      console.log('[SW Demo] registered, scope:', reg.scope);
+      v.custom.write('swScope', reg.scope);
+      v.custom.write('swReady', true);
+      v.custom.write('swError', '');
+
+      var state = reg.installing  ? 'installing'
+                : reg.waiting     ? 'waiting'
+                : reg.active      ? 'active'
+                :                   'registered';
+      v.custom.write('swStatus', state);
+
+      // Ask the active worker for its cache version
+      if (reg.active) { reg.active.postMessage({ type: 'GET_VERSION' }); }
+
+      // Track update lifecycle
+      reg.addEventListener('updatefound', function () {
+        v.custom.write('swStatus', 'updating');
+        var nw = reg.installing;
+        nw.addEventListener('statechange', function () {
+          if (nw.state === 'activated') {
+            v.custom.write('swStatus', 'activated');
+            nw.postMessage({ type: 'GET_VERSION' });
+          }
+        });
+      });
+    })
+    .catch(function (err) {
+      console.error('[SW Demo] registration failed:', err);
+      v.custom.write('swStatus', 'error');
+      v.custom.write('swError',  err.message || String(err));
+      v.custom.write('swReady',  false);
+    });
+
+  // ── Receive messages from the service worker ───────────────────────────────
+  navigator.serviceWorker.addEventListener('message', function (ev) {
+    if (ev.data && ev.data.type === 'VERSION') {
+      v.custom.write('swCacheName', ev.data.version);
+    }
+  });
+})();

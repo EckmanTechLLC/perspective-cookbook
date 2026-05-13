@@ -1,0 +1,143 @@
+# Probe 3 — WebSocket intercept + connection.send
+# Captured: 2026-05-07T21:55:33.363Z (Probe 3 install) through ~21:56:02
+# Note: capture also contains incidental Probe 2 + Probe 1 re-runs that the
+#       user triggered to generate WS traffic. Those re-confirmations are kept
+#       because they capture the WS frames their actions produced.
+# Gateway: Ignition 8.3.6 in cookbook-ignition Docker container
+
+VM501:3 === PROBE 3: WebSocket intercept + connection.send (2026-05-07T21:55:33.363Z) ===
+VM501:3 [via window.__client — confirmed 8.3.6]
+VM501:3 WebSocket.prototype.send HOOKED -- all outgoing frames now log as [WS-OUT]
+VM501:3 connection own keys: maxIdleTimeMs, idleTimeIntervalMs, closeEventDefinitions, client, handlers, status, lastIdleCheck, webSocket
+VM501:3 connection proto methods: constructor, socketInit, idleTimeCheck, connected, isSecure, connect, makeOnOpenCallback, makeOnCloseCallback, getCloseEventDefinition, send, processMessage, disconnect, status
+VM501:3 connection.send.toString(): function () { [native code] }
+VM501:3 webSocket.url: ws://<your-gateway-host>:18088/system/pws/cookbook/<session-id>?token=<redacted>
+VM501:3 webSocket.readyState: 1 (1=OPEN, 3=CLOSED)
+VM501:3 webSocket.binaryType: blob
+VM501:3 webSocket.protocol:
+VM501:3 Incoming message listener added -- [WS-IN] in console. Interact with the page to see frames.
+
+[WS-OUT] client-activity:{"lastActiveTime":1778190933364}
+[WS-IN]  client-value-update:{"values":{"views":{},"page":{},"session":{"props":{"$":["map/merge"],"lastActivity":{"$":["ts",0,1778190933365],"$ts":1778190933365}}}},"sync":[]}
+[WS-IN]  keepalive:{"ts":4413615912952065}
+[WS-OUT] client-activity:{"lastActiveTime":1778190946276}
+[WS-IN]  client-value-update:{"values":{"views":{},"page":{},"session":{"props":{"$":["map/merge"],"lastActivity":{"$":["ts",0,1778190946278],"$ts":1778190946278}}}},"sync":[]}
+[WS-OUT] client-activity:{"lastActiveTime":1778190946464}
+
+# (Probe 2 ran here — re-confirmation, see recon-8.3.6-2026-05-07-probe2.txt)
+
+[WS-OUT] client-activity:{"lastActiveTime":1778190946467}
+[WS-IN]  client-value-update:{"values":{"views":{},"page":{},"session":{"props":{"$":["map/merge"],"lastActivity":{"$":["ts",0,1778190946468],"$ts":1778190946468}}}},"sync":[]}
+[WS-OUT] client-activity:{"lastActiveTime":1778190962141}
+[WS-IN]  client-value-update:{"values":{"views":{},"page":{},"session":{"props":{"$":["map/merge"],"lastActivity":{"$":["ts",0,1778190962144],"$ts":1778190962144}}}},"sync":[]}
+[WS-OUT] client-activity:{"lastActiveTime":1778190962270}
+
+# (Probe 1 ran here — re-confirmation, no WS-relevant data)
+
+[WS-OUT] client-activity:{"lastActiveTime":1778190962272}
+[WS-IN]  client-value-update:{"values":{"views":{},"page":{},"session":{"props":{"$":["map/merge"],"lastActivity":{"$":["ts",0,1778190962274],"$ts":1778190962274}}}},"sync":[]}
+[WS-IN]  keepalive:{"ts":4413645915329655}
+
+# === FINDINGS ===
+#
+# Q4 ✅ ANSWERED: the gateway WS protocol is PLAIN TEXT, NOT binary, NOT protobuf.
+#
+#   Frame format:  <message-type>:<json-payload>
+#                  ^---- a literal colon separates them
+#
+#   Confirmed message types observed in this capture:
+#     - client-activity      (outgoing heartbeat: {"lastActiveTime": <epoch-ms>})
+#     - client-value-update  (incoming gateway → client property update)
+#     - keepalive            (incoming gateway → client heartbeat: {"ts": <hi-res-ts>})
+#
+#   WebSocket URL pattern:
+#     ws://<your-gateway-host>:<port>/system/pws/<project-name>/<session-id>?token=<redacted>
+#
+#   Other tested types (NOT yet observed but expected from the IA codebase):
+#     - tag-read, tag-write, tag-subscribe
+#     - named-query-call
+#     - view-start, view-stop
+#     - script-run
+#     - alarm-status, alarm-ack
+#   Probe these by triggering the corresponding actions in the session
+#   while Probe 3's hooks are live.
+#
+#   IMPLICATION: anyone with `window.__client.connection.webSocket` can
+#   send arbitrary frames as the logged-in user. The technique scope expands
+#   from "render arbitrary HTML/JS in a view" to "make arbitrary RPC calls
+#   to the gateway as that user." This is the full attack surface (and the
+#   full power surface) of the Markdown injection.
+#
+#   `connection.send.toString() = "function () { [native code] }"` — the send
+#   IS the underlying WebSocket's send, bound to webSocket. Frames are
+#   pre-formatted strings, no client-side wrapping. Send a string in the
+#   `<type>:<json>` shape and the gateway will route it.
+#
+#
+# Q2 EXTENDED (partially cracked the encoded format):
+#
+#   The incoming `client-value-update` frame's payload shows the actual
+#   encoded format that `update()` accepts:
+#
+#       {"props": {
+#           "$": ["map/merge"],
+#           "lastActivity": {
+#               "$": ["ts", 0, 1778190946278],
+#               "$ts": 1778190946278
+#           }
+#       }}
+#
+#   The encoded format uses **discriminated tuples in a `$` field**:
+#     - `["map/merge"]` — apply this object as a merge into a Map
+#     - `["ts", <flag>, <epoch-ms>]` — typed timestamp value
+#     - `$ts` — bare timestamp shadow (for fast access?)
+#
+#   To call params.update() ourselves we'd need to construct payloads like:
+#       params.update({"$": ["map/merge"], "color": {"$": ["str", "#FF0000"]}})
+#   ...but the exact tuple tags ("str", "num", "bool", etc.) need observation
+#   first. Get the gateway to emit a property update for a known typed value
+#   and read the captured frame.
+#
+#   This converts Q2 from "unknown encoded format" to "known scheme,
+#   need to enumerate the tuple tag vocabulary."
+#
+#
+# === Other observations ===
+#
+# - `connection` proto includes `processMessage` — the inbound dispatcher.
+#   We could hook it (or replace it) to mock gateway responses for testing.
+# - `views: {}` and `page: {}` are EMPTY in every client-value-update —
+#   meaning the gateway is NOT pushing view-level updates while idle. Only
+#   `session.props.lastActivity` pings back for heartbeat. Triggering a
+#   view-level update (write to a tag bound to a Perspective component)
+#   would show the view-level encoded format.
+# - Heartbeat cadence: `client-activity` outgoing roughly every 13–15 sec
+#   (idle session). Gateway responds with same `client-value-update` shape
+#   each time, just refreshing `lastActivity`.
+# - `keepalive` timestamps are very large (~4.4 trillion) — looks like
+#   nanoseconds-since-something or a JVM `System.nanoTime()` value, not
+#   epoch-ms. Different time domain than `client-activity.lastActiveTime`.
+#
+#
+# === Action items for INTERNALS doc ===
+#
+# §11 Q4: mark ✅ ANSWERED — protocol is `<type>:<json>`, plain text
+# §11 Q2: keep open BUT upgrade status — now we have the encoded-format
+#         scheme, just need to enumerate the tuple tags
+# Add a new §14 "Gateway WS protocol — observed wire format" with:
+#   - URL pattern
+#   - Frame format
+#   - Message types catalog (start: client-activity, client-value-update,
+#     keepalive — to be expanded as we observe more)
+#   - The encoded property-tree tuple format (`{"$":["tag", ...args]}`)
+#   - The `connection.send` direct-send recipe (with safety caveats)
+#
+# === Follow-up probes worth queuing ===
+#
+# - Probe 3b (interactive type catalog): with WS hooks installed, in the
+#   gateway UI: trigger a tag write, run a named query, open another view,
+#   write to a session prop. Capture the frame types each generates.
+# - Probe 3c (encoded-tag enumeration): create a test view with one param
+#   of each primitive type (string, number, boolean, date, dataset, color,
+#   array, map). Subscribe to it, trigger updates from the gateway, capture
+#   the encoded forms to learn the tuple tag vocabulary.

@@ -1,0 +1,121 @@
+# Probe 4 — page._newViewStore + page.startView
+# Captured: 2026-05-07T22:00:22.406Z
+# Gateway: Ignition 8.3.6 in cookbook-ignition Docker container
+
+VM555:3 === PROBE 4: page._newViewStore + page.startView (2026-05-07T22:00:22.406Z) ===
+VM555:3 [via window.__client — confirmed 8.3.6]
+VM555:3 --- _newViewStore ---
+VM555:3 EXISTS. source: _newViewStore(e,t,o,n,i){const r=w.instanceKeyFor(e,t),p=this.sessionStateCache.remove(r);return new f.ViewStore(this,e,t,o,n,p,i)}
+VM555:3 _newViewStore(null): ERR Converting circular structure to JSON
+    --> starting at object with constructor 'g'
+    |     property 'componentEvents' -> object with constructor 'p.6692.t.ComponentEvents'
+    --- property 'component' closes the circle
+VM555:3 _newViewStore('cookbook/Recon', {}): ERR Converting circular structure to JSON
+    (same circular-ref error)
+VM555:3 _newViewStore('cookbook/Recon', {}, 'mp1'): ERR Converting circular structure to JSON
+    (same)
+VM555:3 _newViewStore('cookbook/Recon', {}, 'mp1', {}): ERR Converting circular structure to JSON
+    (same)
+VM555:3 --- startView ---
+VM555:3 page.startView EXISTS. source: function(){return ye(e,t,n||this,arguments)}
+VM555:3 --- _findViewDef ---
+VM555:3 page._findViewDef EXISTS. source: _findViewDef(e){return this.parent.resources.findView(e)}
+VM555:3 _findViewDef('cookbook/Recon'): OK => undefined
+VM555:3 --- _isViewDefined ---
+VM555:3 page._isViewDefined EXISTS
+VM555:3 _isViewDefined('cookbook/Recon'): OK => false
+VM555:3 --- isLoadAheadSafe ---
+VM555:3 page.isLoadAheadSafe EXISTS. source: isLoadAheadSafe(e,t,o){const n=this.parent.flags;if(e&&n.load_ahead&&R.has(e.type)&&t&&t.props){if("with-parent"!==(t.props.loading&&t.props.loading.order||"after-parent")&&"forced"!==n.load_ahead)ret
+
+# === FINDINGS ===
+#
+# Q5 ✅ ANSWERED: page._newViewStore works as a CLIENT-ONLY view-store factory.
+#                 No server round-trip required. View definition does not need
+#                 to exist on the gateway.
+#
+#   Signature (from minified source):
+#     _newViewStore(viewPath, params, mountPath?, options?, sessionState?)
+#       e = viewPath (e.g. 'cookbook/SomeView')
+#       t = params (plain object, what would normally come from caller)
+#       o, n = additional positional args (probably mountPath + options)
+#       i = ? (passed through to ViewStore constructor)
+#
+#   Implementation (deminified):
+#     _newViewStore(viewPath, params, ...rest) {
+#       const key = w.instanceKeyFor(viewPath, params);
+#       const cachedSessionState = this.sessionStateCache.remove(key);
+#       return new f.ViewStore(this /* page */, viewPath, params,
+#                              ...rest, cachedSessionState, ...);
+#     }
+#
+#   IMPORTANT: the "ERR" in the log above is misleading. The probe's
+#   tryIt() helper attempts JSON.stringify() on the return value to log it.
+#   The returned ViewStore has circular references (componentEvents.component
+#   cycles back), so JSON.stringify throws AFTER the call already succeeded.
+#   The store object IS created and returned. We just couldn't pretty-print it.
+#
+# IMPLICATION: We can create "ghost" view stores client-side, with no server
+# involvement, and use them as MobX-backed state buckets. They:
+#   - Have full property tree API (params, custom, props, root)
+#   - Fire subscribe callbacks on write
+#   - Are NOT registered in page.views (you have to keep your own ref)
+#   - Don't sync to the gateway (no gateway-side view = no sync target)
+#
+# Pattern:
+#   var ghost = window.__client.page._newViewStore('ghost/scratch', {});
+#   ghost.params.write('foo', 'bar');
+#   ghost.params.read('foo'); // 'bar'
+#   ghost.params.subscribe(fn); // reactive
+#
+# Use cases:
+#   - Cross-Markdown-component shared state inside a single session
+#   - Backing store for D3 charts, Monaco editor content, etc.
+#   - Shadow data for client-side computations without polluting view.params
+#
+# CAVEAT: stores spawned this way aren't tracked in page.views, so you must
+# keep a JS reference (window.__myGhostStore = ghost) or expose it some
+# other way for code to find it later.
+#
+#
+# === Other findings ===
+#
+# - page._findViewDef(path) — returns the view definition object from
+#   parent.resources.findView(). Returns undefined if path doesn't exist.
+#   Use BEFORE _newViewStore if you want validation.
+#
+# - page._isViewDefined(path) — boolean version. Returns false for unknown paths.
+#   For our test path 'cookbook/Recon' it returned false (we have 'cookbook/Internals_Recon',
+#   not 'cookbook/Recon').
+#
+# - page.startView — minified passthrough. Likely the official "start AND mount"
+#   entry point (instantiate store + register in page.views + sync to gateway).
+#   Source `function(){return ye(e,t,n||this,arguments)}` doesn't reveal args
+#   without more digging. Worth a follow-up probe with hooks on `ye`.
+#
+# - page.isLoadAheadSafe — preloading-eligibility check. Reads page.parent.flags.
+#   Not directly useful, but confirms `parent` is the session store (window.__client)
+#   and that `flags` is feature-flags state.
+#
+#
+# === Action items for INTERNALS doc ===
+#
+# §11 Q5: ✅ ANSWERED — _newViewStore works client-only, no gateway needed.
+# Add §15 "Ghost view stores via _newViewStore" with the pattern above.
+# §6 (page level): clarify _findViewDef / _isViewDefined / startView roles
+#   based on observed behavior.
+#
+# === Probe-quality note ===
+#
+# The probe's tryIt() helper logs the return value via JSON.stringify(),
+# which fails on objects with circular refs (almost all MobX-backed stores).
+# Future probes that return such objects should use a circular-safe formatter:
+#   try { return JSON.stringify(r); }
+#   catch(e) { return Object.prototype.toString.call(r) + ' [circular]'; }
+# Minor — we got the data anyway from the function-source dump.
+#
+# === Follow-up probes worth queuing ===
+#
+# - Probe 4b: actually instantiate a ghost store, write/read/subscribe,
+#   verify it persists across DOM re-renders, verify it does NOT sync to gateway.
+# - Probe 4c: hook page.startView properly to discover its full call chain
+#   (reaching `ye(...)` and seeing whether it requires gateway acknowledgment).

@@ -1,0 +1,43 @@
+# Probe 1 — window.__client + global scan
+# Captured: 2026-05-07
+# Gateway: Ignition 8.3.6 in cookbook-ignition Docker container
+# Browser: Chrome on Windows, session URL http://<your-gateway-host>:18088/data/perspective/client/cookbook/Internals_Recon
+# Source log: <local-log-path>
+
+VM29:3 === PROBE 1: window.__client + global scan (2026-05-07T18:59:50.176Z) ===
+VM29:3 window.__client EXISTS (type=object)
+VM29:3   own keys: error, _redundancyStatus, _fullscreenTransition, bluetooth, deviceSettings, networkLatencyTimestampedData, simulatingLostConnection, subscriptionMap, flags, upTimeStartTime, sessionPropsChangeDisposer, subscribe, notify, projectName, _tabId, tabIdUrlSafe, projectTitle, edition, coBrandingEnabled, _autoIdpAuthAllowed, sessionId, activeContextMenuRef, sessionClosedMessage, pageClosedMessage, created, lastHelloCheck, stateReactionMap, fsm, history, instrumentation, connection, resources, mounts, page, defaultsStore, auth, system, notifications, location, idle, keyEvent, iconRendererStore, symbolRendererStore, formSubmissionStore, autoIdpAuth, _token, sessionState
+VM29:3   .page exists, keys: fileDownloadInProgress, fileDownloadPayloadQueue, eventsToSync, sessionStateCache, pendingPropertyUpdates, sessionProps, sessionCustom, pageProps, propChangeTimestampedData, parent, views, missingViewUpdates, dirtyViews, pendingSync, _pageTitle, _appBarVisible, unsubPageProps, _theme, unsubSessionProps, propChangeUpdateTimer
+VM29:3   .connection exists, keys: maxIdleTimeMs, idleTimeIntervalMs, closeEventDefinitions, client, handlers, status, lastIdleCheck, webSocket
+VM29:3 window.__ignition = undefined
+VM29:3 window.__perspective = undefined
+VM29:3 window.__pg = undefined
+VM29:3 window.__session = undefined
+VM29:3 window.__store = undefined
+VM29:3 window.__app = undefined
+VM29:3 window.__gateway = undefined
+VM29:3 window.__IA = undefined
+VM29:3 window.__Perspective = undefined
+
+# === FINDINGS ===
+#
+# Q1 ANSWERED: window.__client EXISTS in 8.3.6.
+#   - It IS the session store (the same store the fiber walk reaches at L9).
+#   - Direct paths: window.__client.page.views, .connection, .system, .auth, .bluetooth,
+#                   .notifications, .location, .fsm, .flags, .sessionState, etc.
+#   - Implication: the §4 fiber walk is no longer required for global session reach.
+#     New canonical pattern:
+#         var views = Array.from(window.__client.page.views.values());
+#         var view = views.find(v => v.resourcePath === '<viewResourcePath>');
+#         view.params.write('key', value);
+#
+# Other notable keys to investigate later:
+#   - bluetooth          — built-in BLE handle? (relevant to BLE recipes)
+#   - simulatingLostConnection — offline-testing hook? (relevant to Service Worker recipe)
+#   - fsm, flags         — session state machine, feature flags
+#   - iconRendererStore, symbolRendererStore — icon/svg rendering
+#   - formSubmissionStore — form workflow state
+#   - resources, mounts  — resource graph + active mounts
+#   - autoIdpAuth, _token — IdP token internals
+#
+# No other __* globals match. Stable shorthand for IA appears to be __client only.

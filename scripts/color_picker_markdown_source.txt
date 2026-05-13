@@ -1,0 +1,8 @@
+// Perspective expression binding for ColorPickerMarkdown.props.source — DEBUG
+// Writes color to EACH open view's params via params.write('color', value).
+// The view that owns 'color' should accept it; others may noop or error.
+// This is the view-level write — should propagate to bindings if any path does.
+
+concat('<input type="color" value="',
+{view.params.color},
+'" oninput="(function(el){var tf=document.querySelector(\'input[type=text]\'); if(!tf) return; var fk=Object.keys(tf).filter(function(k){return k.indexOf(\'__reactFiber\')===0;})[0]; var f=tf[fk]; for(var i=0;i<9;i++){if(!f) break; f=f.return;} var sn=f.stateNode; var page=sn.props.store.page; var views; try{views=Array.from(page.views.values());}catch(e){views=Object.values(page.views._data||{});} views.forEach(function(v,i){console.log(\'view[\'+i+\'] mountPath=\'+v.mountPath+\' resourcePath=\'+v.resourcePath); try{var before=v.params.read(\'color\'); v.params.write(\'color\', el.value); var after=v.params.read(\'color\'); console.log(\'  write color: before=\'+before+\' after=\'+after);}catch(e){console.log(\'  err:\', e.message);}});})(this)"/>')

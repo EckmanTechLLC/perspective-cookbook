@@ -1,0 +1,96 @@
+# Probe 2 — propertyTree.update() / operate() introspection
+# Captured: 2026-05-07T21:51:52.985Z
+# Gateway: Ignition 8.3.6 in cookbook-ignition Docker container
+# Browser: Chrome on Windows, session at http://<your-gateway-host>:18088/data/perspective/client/cookbook/Internals_Recon
+
+VM489:3 === PROBE 2: propertyTree.update() / operate() introspection (2026-05-07T21:51:52.985Z) ===
+VM489:3 [via window.__client — confirmed 8.3.6]
+VM489:3 View mountPath: C
+VM489:3 --- params own keys: listeners, notifyListeners, notify, root, onWriteCallback, diagnosticId
+VM489:3 --- params proto methods: constructor, subscribe, update, onWrite, isDirty, getQualities, getDirtyWrites, read, readString, readStringIfExists, readArray, readEncoded, readNumber, readBoolean, readDate, readQualified, readStyle, readColor, readDataset, readType, readObject, isObject, isArray, isDataset, isPrimitive, readKeys, readLength, qualityOf, write, operate, toPlainObject, export
+VM489:3 params.readKeys(): OK => []
+VM489:3 readKeys result: []
+VM489:3 params.export(): OK => {}
+VM489:3 params.toPlainObject(): OK => {}
+VM489:3 --- update() ---
+VM489:3 params.update.toString(): update(e){this.root.update(e)&&this.notify()}
+VM489:3 params.update(null): ERR Cannot read properties of null (reading '$')
+VM489:3 params.update({}): ERR Update message not encoded properly
+VM489:3 params.update([]): ERR Update message not encoded properly
+VM489:3 params.update({type:0,key:'x',value:1}): ERR Update message not encoded properly
+VM489:3 params.update({version:0,updates:[]}): ERR Update message not encoded properly
+VM489:3 params.update(ArrayBuffer(4)): ERR Update message not encoded properly
+VM489:3 --- operate() ---
+VM489:3 params.operate.toString(): operate(e,t,o,n){let i=this.root,r=e;for(;r;)if(i&&i.isMap){const e=i.qv.value;let t,n;const p=f.exec(r);if(r.length>0&&"["===r[0]){const e=r.search("]");t=r.substring(2,e-1);const o="."===r[e+1]?2:1;n=r.substring(e+o)}else p?(t=r.substring(0,p.index),n=r.substring(p.index+("["===p[0]?0:1))):(t=r,n="");if(!e.has(t)||void 0===e.get(t))return o(i,t,n);i=e.get(t),r=n}else{if(!i||!i.isArray){const t=`
+VM489:3 params.operate(''): ERR t is not a function
+VM489:3 params.operate('x'): ERR o is not a function
+VM489:3 params.operate('write:x=1'): ERR o is not a function
+VM489:3 params.operate(JSON): ERR o is not a function
+
+# === FINDINGS ===
+#
+# Q2 ANSWERED: params.update() requires a specific ENCODED message format,
+#              not a plain JS object/array/buffer.
+#   - All untyped payloads return: "Update message not encoded properly"
+#   - update(null) reveals it accesses e.$ — the encoded payload has a `$`
+#     field/discriminator (likely the protobuf message-type marker, or the
+#     IA-internal encoded-property-tree wire format)
+#   - update.toString() shows it's a thin wrapper:
+#         update(e){ this.root.update(e) && this.notify() }
+#     The real encoder/decoder lives on `params.root` (the root PropertyNode)
+#   - We cannot synthesize a valid `update()` payload without a captured frame
+#     from the gateway. Probe 3 (WS intercept) will give us those frames.
+#
+#   PRACTICAL: keep using params.write(key, value) for single-key updates.
+#              update() is only useful if we want to replay a captured
+#              gateway-to-client property-update frame.
+#
+# Q3 ANSWERED: params.operate() is NOT a write API. It's a path-navigator
+#              that walks the property tree and invokes callbacks at the leaf.
+#   - Signature: operate(pathString, mapCallback, primitiveCallback, arrayCallback)
+#                — 4 args; last 3 must be functions
+#   - Errors confirm: "t is not a function", "o is not a function" — the
+#     callbacks aren't optional
+#   - From the source: walks `this.root` following dotted/bracketed path syntax
+#     (`foo.bar[0].baz`), descends into `i.isMap` or `i.isArray` nodes,
+#     dispatches to the appropriate callback at the leaf
+#   - This is the internal path-resolver used by bindings, NOT a write primitive
+#
+#   PRACTICAL: ignore operate() for our purposes. It's plumbing.
+#
+# === Bonus findings ===
+#
+# - `params own keys` (instance fields): listeners, notifyListeners, notify,
+#   root, onWriteCallback, diagnosticId
+#     - `root` is the actual PropertyNode tree (where update/operate dispatch to)
+#     - `onWriteCallback` is settable — could be useful for hooking writes
+#     - `diagnosticId` could help identify trees in logs
+#
+# - Prototype method list expands our INTERNALS §2 list with:
+#     readStringIfExists, readStyle, readColor, readDataset, readType
+#   These are typed-read variants we hadn't documented. Worth adding to §2.
+#
+# - The Internals_Recon view's params is empty (readKeys() = [], export() = {}) —
+#   we never declared any params on the view. That's fine for Probe 2's purposes;
+#   we only needed the property tree's METHODS, not data in it.
+#
+# - `View mountPath: "C"` — single character. Suspicious. Either:
+#   (a) `views[0]` returned an unexpected entry (maybe a popup, dock, or page-
+#       wrapper view that registers as a session-level concept with mountPath="C"),
+#   (b) the mountPath field is genuinely a short identifier in 8.3.6 (different
+#       from what we documented in INTERNALS §5).
+#   FOLLOW-UP: in Probe 6 (cross-version dump), enumerate ALL views in
+#   page.views and log each one's mountPath / resourcePath, so we know what
+#   "C" is and what views[0] actually points at.
+#
+# === Action items for INTERNALS doc ===
+#
+# §11 Q2: mark ✅ ANSWERED — "encoded message required, not synthesizable
+#         without captured frame; use write(key, value) instead"
+# §11 Q3: mark ✅ ANSWERED — "path-navigator with callback dispatch; not a
+#         write API"
+# §2: add readStringIfExists, readStyle, readColor, readDataset, readType
+#     to the prototype method list
+# §2: note that update() delegates to params.root.update() and the encoded
+#     format requires a `.$` field
+# §5: flag the mountPath="C" anomaly for Probe 6 to characterize
