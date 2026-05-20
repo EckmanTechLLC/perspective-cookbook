@@ -21,6 +21,30 @@ code, no production gateways. All experiments run against a fresh
 
 ---
 
+## About the Code — Why `eval(atob(...))`?
+
+If you skim the view JSONs and see `eval(atob('...'))` in the Markdown source
+expressions, that pattern is the canonical malware fingerprint and the reflex
+to nope out is reasonable. Here's what's actually going on:
+
+**Every JS payload is also published in plain readable form** under
+`scripts/*_payload_clean.js` (production variant) and `scripts/*_payload_debug.js`
+(with `console.log` calls for tracing). The base64-encoded form in the view JSON
+is the *delivery mechanism*, not the source of truth.
+
+**Why base64 at all?** Perspective's Markdown `props.source` is a Perspective
+expression string, not raw HTML. Embedding multi-line JS through that parser
+means navigating three nested escape layers (expression string → HTML attribute
+→ JS string literal), where every `'` has to be escaped as `\'` and newlines
+get mangled. Base64-encoding the JS into a single ASCII line sidesteps the
+entire escape-soup problem. It's encoding for transport, not obfuscation.
+
+**Auditing any recipe takes one click:** open `scripts/<recipe>_payload_clean.js`,
+read the JS in its original form. The encoding instructions are in
+`scripts/README.md` if you want to modify a payload and re-encode.
+
+---
+
 ## Recipes
 
 Seven working patterns are included in this repository. Recipe docs live in
